@@ -1,16 +1,11 @@
 // =============================================================
 // FIREBASE SETUP — paste your own project's config below.
-//
-// How to get this:
-// 1. Go to https://console.firebase.google.com
-// 2. Create a project (skip Google Analytics, not needed)
-// 3. Click the "</>" (web) icon to register a web app
-// 4. Copy the firebaseConfig object it gives you and paste it here
-// 5. In the left menu, go to Build → Firestore Database → Create database
-//    → Start in test mode → pick a location close to you (e.g. asia-south1)
+// See README.md for the full setup steps.
 // =============================================================
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import {
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, query, orderBy,
+} from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "YOUR_API_KEY",
@@ -24,54 +19,55 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// All restaurant data lives in one Firestore collection called "dhuaan",
-// with one document per data type (orders, reviews, menu). This keeps
-// things simple and cheap to read/write.
-const COLLECTION = "dhuaan";
+const ordersCol = collection(db, "orders");
+const reviewsCol = collection(db, "reviews");
+const configCol = collection(db, "config");
 
-async function readDoc(key) {
-  try {
-    const snap = await getDoc(doc(db, COLLECTION, key));
-    return snap.exists() ? snap.data().value : null;
-  } catch (e) {
-    console.error(`Firestore read failed for "${key}":`, e);
-    return null;
-  }
+/* ---------------------------- Orders ----------------------------
+   Each order is its own document (fast to write — no need to read
+   the whole order history first). Reading fetches every order doc,
+   newest first. */
+export async function saveOrder(order) {
+  try { await setDoc(doc(ordersCol, order.id), order); return true; }
+  catch (e) { console.error("saveOrder failed:", e); return false; }
 }
 
-async function writeDoc(key, value) {
-  try {
-    await setDoc(doc(db, COLLECTION, key), { value, updatedAt: new Date().toISOString() });
-    return true;
-  } catch (e) {
-    console.error(`Firestore write failed for "${key}":`, e);
-    return false;
-  }
-}
-
-/* ---------------------------- Orders ---------------------------- */
 export async function getOrders() {
-  const v = await readDoc("orders-list");
-  return v ? JSON.parse(v) : [];
+  try {
+    const snap = await getDocs(query(ordersCol, orderBy("placedAt", "desc")));
+    return snap.docs.map((d) => d.data());
+  } catch (e) { console.error("getOrders failed:", e); return []; }
 }
-export async function saveOrders(list) {
-  return writeDoc("orders-list", JSON.stringify(list));
+
+export async function updateOrderStatus(orderId, status) {
+  try { await setDoc(doc(ordersCol, orderId), { status }, { merge: true }); return true; }
+  catch (e) { console.error("updateOrderStatus failed:", e); return false; }
 }
 
 /* ---------------------------- Reviews ---------------------------- */
-export async function getReviews() {
-  const v = await readDoc("reviews-list");
-  return v ? JSON.parse(v) : [];
-}
-export async function saveReviews(list) {
-  return writeDoc("reviews-list", JSON.stringify(list));
+export async function saveReview(review) {
+  try { await setDoc(doc(reviewsCol, review.id), review); return true; }
+  catch (e) { console.error("saveReview failed:", e); return false; }
 }
 
-/* ---------------------------- Menu / restaurant config ---------------------------- */
-export async function getMenuConfig() {
-  const v = await readDoc("menu-config");
-  return v ? JSON.parse(v) : null;
+export async function getReviews() {
+  try {
+    const snap = await getDocs(query(reviewsCol, orderBy("at", "desc")));
+    return snap.docs.map((d) => d.data());
+  } catch (e) { console.error("getReviews failed:", e); return []; }
 }
+
+/* ---------------------------- Menu / restaurant config ----------------------------
+   This one stays a single document — it changes rarely, so there's
+   no read-modify-write-a-growing-list problem here. */
+export async function getMenuConfig() {
+  try {
+    const snap = await getDoc(doc(configCol, "menu"));
+    return snap.exists() ? snap.data().value : null;
+  } catch (e) { console.error("getMenuConfig failed:", e); return null; }
+}
+
 export async function saveMenuConfig(config) {
-  return writeDoc("menu-config", JSON.stringify(config));
+  try { await setDoc(doc(configCol, "menu"), { value: config }); return true; }
+  catch (e) { console.error("saveMenuConfig failed:", e); return false; }
 }
