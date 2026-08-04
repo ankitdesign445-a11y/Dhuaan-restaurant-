@@ -5,7 +5,7 @@ import {
   Globe, Lock, Search,
 } from "lucide-react";
 import {
-  saveOrder, getOrders, updateOrderStatus, saveReview, getReviews,
+  saveOrder, getOrders, subscribeOrders, getOrderById, subscribeToOrder, updateOrderStatus, saveReview, getReviews,
   getMenuConfig, saveMenuConfig as saveMenuConfigRemote,
 } from "./firebase";
 import {
@@ -139,13 +139,26 @@ export default function App() {
     });
   }, [canPlace, orderMode, tableNumber, custName, custPhone, cartItems, cartTotal, t]);
 
-  const loadStaffOrders = useCallback(async () => { setStaffLoading(true); setStaffOrders(await readOrders()); setStaffLoading(false); }, []);
-  useEffect(() => { if (staffView && staffUnlocked) loadStaffOrders(); }, [staffView, staffUnlocked, loadStaffOrders]);
+  // Real-time: every phone with the staff panel open gets pushed new
+  // orders and status changes instantly, no polling/refresh needed.
   useEffect(() => {
     if (!staffView || !staffUnlocked) return;
-    const interval = setInterval(loadStaffOrders, 8000);
-    return () => clearInterval(interval);
-  }, [staffView, staffUnlocked, loadStaffOrders]);
+    setStaffLoading(true);
+    const unsubscribe = subscribeOrders(
+      (list) => { setStaffOrders(list); setStaffLoading(false); },
+      () => setStaffLoading(false)
+    );
+    return () => unsubscribe();
+  }, [staffView, staffUnlocked]);
+
+  // Manual "Refresh" button in the staff panel — with a live subscription
+  // already running this is mostly a reassurance tap, but it forces an
+  // immediate one-off re-fetch too.
+  const loadStaffOrders = useCallback(async () => {
+    setStaffLoading(true);
+    setStaffOrders(await readOrders());
+    setStaffLoading(false);
+  }, []);
 
   const submitReview = useCallback(async () => {
     if (!reviewName.trim() || !reviewComment.trim()) return;
@@ -159,10 +172,23 @@ export default function App() {
 
   const findOrder = useCallback(async () => {
     setTrackError(""); setTrackResult(null);
-    const list = await readOrders();
-    const found = list.find((o) => o.id.toLowerCase() === trackId.trim().toUpperCase().toLowerCase());
+    const id = trackId.trim().toUpperCase();
+    if (!id) return;
+    const found = await getOrderById(id);
     if (found) setTrackResult(found); else setTrackError(t.orderNotFound);
   }, [trackId, t]);
+
+  // Once an order is found, keep it live — if staff updates the status on
+  // any device, this pushes the change here instantly, no re-search needed.
+  useEffect(() => {
+    if (!trackResult?.id) return;
+    const unsubscribe = subscribeToOrder(trackResult.id, (order) => {
+      if (order) setTrackResult(order);
+    });
+    return () => unsubscribe();
+  }, [trackResult?.id]);
+
+  const closeTrack = useCallback(() => { setTrackOpen(false); setTrackResult(null); }, []);
 
   const updateStatus = useCallback(async (id, status) => {
     setStaffOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)));
@@ -177,12 +203,12 @@ export default function App() {
     await writeMenuConfig({ menu: newMenu, restaurant: newInfo });
   }, []);
 
+  // Real-time: owner panel analytics update the instant any order or
+  // status changes anywhere, on any device.
   useEffect(() => {
     if (!ownerView || !ownerUnlocked) return;
-    const fetchNow = async () => setOwnerOrders(await readOrders());
-    fetchNow();
-    const interval = setInterval(fetchNow, 10000);
-    return () => clearInterval(interval);
+    const unsubscribe = subscribeOrders((list) => setOwnerOrders(list));
+    return () => unsubscribe();
   }, [ownerView, ownerUnlocked]);
 
   const dishName = useCallback((item) => (lang === "hi" ? item.nameHi || item.name : item.name), [lang]);
@@ -409,11 +435,11 @@ export default function App() {
           {/* TRACK ORDER MODAL */}
           {trackOpen && (
             <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-              <div onClick={() => setTrackOpen(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.65)" }} />
+              <div onClick={closeTrack} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.65)" }} />
               <div style={{ position: "relative", width: "min(340px,100%)", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                   <h3 className="disp" style={{ margin: 0, fontSize: 18 }}>{t.trackOrderTitle}</h3>
-                  <button onClick={() => setTrackOpen(false)} style={{ background: "none", border: "none", color: C.text }}><X size={18} /></button>
+                  <button onClick={closeTrack} style={{ background: "none", border: "none", color: C.text }}><X size={18} /></button>
                 </div>
                 <input value={trackId} onChange={(e) => setTrackId(e.target.value)} placeholder={t.enterOrderId} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 14, marginBottom: 10 }} />
                 <button onClick={findOrder} style={{ width: "100%", padding: "10px", borderRadius: 8, border: "none", background: C.ember, color: "#fff", fontWeight: 700, fontSize: 13, marginBottom: 12 }}>{t.findOrder}</button>
